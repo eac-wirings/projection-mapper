@@ -19,6 +19,7 @@ Most mapping tools warp your video to fit the building at show time. Projection 
 
 ## Features
 
+- **Separate output window (optional):** keep the controls on the laptop screen and send only the projection to the projector. You map by clicking a live preview on the laptop while the crosshair shows up on the building, so the menu never lands on the projection.
 - **Map:** a full-screen crosshair; click to add points, drag to move them, arrow keys to nudge 1 px (Shift for 10 px), Alt+click to insert a point on an edge. Undo and redo, plus autosave.
 - **Shapes:** areas, lines and point markers, each with a name and color. A one-click **House template** creates the usual parts (gable, roofline, windows, siding, stone, entry).
 - **Masks / Test:** check alignment with white masks, or light up each shape one at a time with its name.
@@ -34,10 +35,12 @@ Most mapping tools warp your video to fit the building at show time. Projection 
 ## Quick start
 
 1. Connect the projector and set your computer to **extend** the desktop (not mirror it).
-2. Open the tool, drag the browser window onto the projector, and press **F** for fullscreen.
+2. Open the tool, then either:
+   - **One window:** drag the browser window onto the projector and press **F** for fullscreen, or
+   - **Two windows:** click **⧉ Open separate output window**, drag the new window onto the projector (Chrome and Edge can place it there for you) and click it to go fullscreen. The controls stay on the laptop.
 3. Under **Projector resolution**, click **Use this screen** and check that it matches the projector's native resolution.
 4. Turn the projector's keystone correction **off**. Focus with **4 Grid**, then don't touch the projector again.
-5. In **1 Map**, press **B** to dimly light the building, add shapes and click their corners. Press **H** to hide the menu so it isn't projected.
+5. In **1 Map**, press **B** to dimly light the building, add shapes and click their corners. In one-window mode, press **H** to hide the menu so it isn't projected.
 6. Export the guides, make your content at exactly that resolution, add it to the **Playlist** and press **Play**.
 
 ### Keyboard

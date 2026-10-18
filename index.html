@@ -62,6 +62,10 @@ table.keys td:first-child{white-space:nowrap;padding-right:8px}
 #help li{margin:6px 0}
 #toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--accent);color:#111;padding:6px 12px;border-radius:6px;z-index:30;font-weight:600;display:none}
 body.ui-off #panel,body.ui-off #hud{display:none!important}
+body.role-output #panel,body.role-output #hud,body.role-output #help,body.role-output #toast{display:none!important}
+#outMsg{position:fixed;inset:0;z-index:15;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#ddd;font-size:22px;cursor:pointer;background:rgba(0,0,0,.55)}
+#outMsg small{display:block;font-size:14px;color:#999;margin-top:8px}
+#btnOut.on{background:#3ddc84;border-color:#3ddc84;color:#111}
 </style>
 </head>
 <body>
@@ -72,6 +76,7 @@ body.ui-off #panel,body.ui-off #hud{display:none!important}
 <div id="hit"></div>
 <div id="hud"></div>
 <div id="toast"></div>
+<div id="outMsg"></div>
 
 <div id="panel">
   <header><b>Projection Mapper</b><span class="hint" id="resBadge"></span><button id="btnHelp" title="Help (?)">?</button><button id="btnHide" title="Hide UI (H)">Hide</button></header>
@@ -93,6 +98,8 @@ body.ui-off #panel,body.ui-off #hud{display:none!important}
     </label>
     <label class="chk"><input type="checkbox" id="cross" checked> Crosshair</label>
   </div>
+  <button id="btnOut" title="Controls stay on this screen; the projection goes to its own window">⧉ Open separate output window</button>
+  <p class="hint" id="outInfo">Optional: keep these controls on the laptop and send only the projection to the projector.</p>
 
   <h3>Shapes</h3>
   <div class="row"><button id="btnNew">+ New shape</button><button id="btnTemplate">+ House template</button></div>
@@ -164,7 +171,7 @@ body.ui-off #panel,body.ui-off #hud{display:none!important}
 <div id="help"><div class="card">
   <h2>Projection Mapper</h2>
   <ol>
-    <li>Connect the projector, set it to <b>extend</b> the desktop, and drag this browser window onto it. Press <kbd>F</kbd> for fullscreen.</li>
+    <li>Connect the projector and set it to <b>extend</b> the desktop. Either drag this browser window onto the projector and press <kbd>F</kbd> for fullscreen, or click <b>⧉ Open separate output window</b> to keep these controls on the laptop and send only the projection to the projector.</li>
     <li>Set <b>Projector resolution</b> to the projector's native size (try <i>Use this screen</i>). Turn projector keystone <b>off</b>, then focus and zoom using <b>4 Grid</b>. After this, don't touch the projector.</li>
     <li>In <b>1 Map</b>, press <kbd>B</kbd> to light the house dimly. Click <b>+ House template</b>, or press <kbd>N</kbd> for a new shape. Select a shape, then click its corners on the real house. Use the arrow keys for pixel-exact nudges.</li>
     <li>Check alignment with <b>2 Masks</b> and <b>3 Test</b>. Set each shape's role: <b>Show</b> (content plays here), <b>Block</b> (forced black, e.g. windows) or <b>—</b> (guide only).</li>
@@ -184,10 +191,12 @@ const hit = $('#hit');
 const PALETTE = ['#ff3b3b','#ffb020','#ffe14d','#3ddc84','#27c4ff','#4d6bff','#b45cff','#ff5cc8','#7fffd4','#ffffff'];
 const BG = ['#000','#262626','#666','#fff'];
 const KEY = 'house-mapper-v1';
+const ROLE = location.hash === '#output' ? 'output' : 'main'; // 'output' = projector-only window driven by the main window
+let outWin = null, split = false, outW = 16, outH = 9, outScreen = null, gotState = false;
 const dpr = () => window.devicePixelRatio || 1;
 const screenRes = () => [Math.round(screen.width * dpr()), Math.round(screen.height * dpr())];
 
-let S = { W: screenRes()[0], H: screenRes()[1], corners: null, shapes: [], active: -1 };
+let S = { W: screenRes()[0], H: screenRes()[1], pin: null, shapes: [], active: -1 };
 let mode = 'edit', selV = -1, bgLevel = 0, showCross = true, mouse = null, drag = null, pinSel = 0;
 let H = [1,0,0,0,1,0,0,0,1], Hi = H;
 let demo = 'trace', playMask = true, uiOff = false;
@@ -195,8 +204,11 @@ const undoStack = [], redoStack = [];
 
 // ---------- persistence ----------
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.shapes)) S = Object.assign(S, s); } catch (e) {}
+// corner pin is stored as fractions of the output window (older saves used window pixels)
+function pinFromPx(c) { return c ? c.map(([x, y]) => [x / innerWidth, y / innerHeight]) : null; }
+if (S.corners) { S.pin = pinFromPx(S.corners); delete S.corners; }
 let saveT = 0;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }, 250); }
+function save() { if (ROLE === 'output') return; clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }, 250); }
 
 // ---------- math ----------
 function solveH(src, dst) {
@@ -225,11 +237,19 @@ function applyH(h, x, y) { const w = h[6]*x + h[7]*y + h[8]; return [(h[0]*x + h
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // ---------- stage transform ----------
-function defaultCorners() {
-  const vw = innerWidth, vh = innerHeight, s = Math.min(vw / S.W, vh / S.H), w = S.W * s, h = S.H * s, x = (vw - w) / 2, y = (vh - h) / 2;
+// The rectangle that stands for the projector: the whole window, or a preview of the output window when split.
+function viewRect() {
+  if (!split) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
+  const aw = (uiOff ? innerWidth : innerWidth - 356) - 24, ah = innerHeight - 24, s = Math.min(aw / outW, ah / outH), w = outW * s, h = outH * s;
+  return { x: 12 + (aw - w) / 2, y: 12 + (ah - h) / 2, w, h };
+}
+function defaultCorners(r) {
+  const s = Math.min(r.w / S.W, r.h / S.H), w = S.W * s, h = S.H * s, x = r.x + (r.w - w) / 2, y = r.y + (r.h - h) / 2;
   return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
 }
-const corners = () => S.corners || defaultCorners();
+function corners() { const r = viewRect(); return S.pin ? S.pin.map(([fx, fy]) => [r.x + fx * r.w, r.y + fy * r.h]) : defaultCorners(r); }
+function toNorm(px, py) { const r = viewRect(); return [(px - r.x) / r.w, (py - r.y) / r.h]; }
+function ensurePin() { if (!S.pin) S.pin = corners().map(([x, y]) => toNorm(x, y)); }
 function updateTransform() {
   H = solveH([[0,0],[S.W,0],[S.W,S.H],[0,S.H]], corners()); Hi = inv3(H);
   stage.style.width = S.W + 'px'; stage.style.height = S.H + 'px';
@@ -269,11 +289,11 @@ function addTemplate() {
 }
 
 // ---------- undo ----------
-const snapState = () => JSON.stringify({ shapes: S.shapes, corners: S.corners, active: S.active });
+const snapState = () => JSON.stringify({ shapes: S.shapes, pin: S.pin, active: S.active });
 function snapshot() { undoStack.push(snapState()); if (undoStack.length > 300) undoStack.shift(); redoStack.length = 0; }
-function restore(str) { const o = JSON.parse(str); S.shapes = o.shapes; S.corners = o.corners; S.active = o.active; selV = -1; updateTransform(); changed(true); }
-function undo() { if (undoStack.length) { redoStack.push(snapState()); restore(undoStack.pop()); } }
-function redo() { if (redoStack.length) { undoStack.push(snapState()); restore(redoStack.pop()); } }
+function restoreSnap(str) { const o = JSON.parse(str); S.shapes = o.shapes; S.pin = o.pin; S.active = o.active; selV = -1; updateTransform(); changed(true); }
+function undo() { if (undoStack.length) { redoStack.push(snapState()); restoreSnap(undoStack.pop()); } }
+function redo() { if (redoStack.length) { undoStack.push(snapState()); restoreSnap(redoStack.pop()); } }
 
 function changed(structural) { save(); if (structural) renderShapes(); updateStatus(); }
 
@@ -301,17 +321,19 @@ function nearestSeg(s, x, y, tol) {
 }
 
 // ---------- pointer ----------
+const outside = (x, y) => split && (x < 0 || y < 0 || x > S.W || y > S.H);
 hit.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || ROLE === 'output') return;
   hit.setPointerCapture(e.pointerId);
   if (mode === 'pin') {
     const c = corners(); let best = -1, bd = 40;
     c.forEach((p, i) => { const d = Math.hypot(p[0] - e.clientX, p[1] - e.clientY); if (d < bd) { bd = d; best = i; } });
-    if (best >= 0) { snapshot(); if (!S.corners) S.corners = c.map(p => p.slice()); pinSel = best; drag = { kind: 'pin', ox: e.clientX - S.corners[best][0], oy: e.clientY - S.corners[best][1] }; }
+    if (best >= 0) { snapshot(); ensurePin(); pinSel = best; drag = { kind: 'pin', ox: e.clientX - c[best][0], oy: e.clientY - c[best][1] }; }
     return;
   }
   if (mode !== 'edit') return;
   const [x, y] = toContent(e.clientX, e.clientY), tol = tolerance();
+  if (outside(x, y)) return;
   const hv = hitVertex(x, y, tol);
   if (hv) { snapshot(); const sw = hv.s !== S.active; S.active = hv.s; selV = hv.v; drag = { kind: 'v' }; changed(sw); return; }
   let s = active();
@@ -327,18 +349,28 @@ hit.addEventListener('pointerdown', e => {
   s.points.splice(at, 0, [r(clamp(x, 0, S.W)), r(clamp(y, 0, S.H))]); selV = at; drag = { kind: 'v' }; changed(true);
 });
 hit.addEventListener('pointermove', e => {
+  if (ROLE === 'output') return;
   mouse = toContent(e.clientX, e.clientY);
+  if (!drag && outside(mouse[0], mouse[1])) mouse = null;
   if (!drag) return;
   if (drag.kind === 'v') { const s = active(); if (s && s.points[selV]) s.points[selV] = [Math.round(clamp(mouse[0], 0, S.W)), Math.round(clamp(mouse[1], 0, S.H))]; updateStatus(); }
-  else if (drag.kind === 'pin') { S.corners[pinSel] = [e.clientX - drag.ox, e.clientY - drag.oy]; updateTransform(); }
+  else if (drag.kind === 'pin') { S.pin[pinSel] = toNorm(e.clientX - drag.ox, e.clientY - drag.oy); updateTransform(); }
 });
 const endDrag = () => { if (drag) { drag = null; changed(false); } };
 hit.addEventListener('pointerup', endDrag);
 hit.addEventListener('pointercancel', endDrag);
-hit.addEventListener('pointerleave', () => { if (!drag) mouse = null; });
+hit.addEventListener('pointerleave', () => { if (!drag && ROLE !== 'output') mouse = null; });
 
 // ---------- keyboard ----------
 addEventListener('keydown', e => {
+  if (ROLE === 'output') { // the projector window only handles fullscreen; everything else goes to the controls
+    if (e.key === 'f' || e.key === 'F') toggleFull();
+    else if (window.opener) { if (e.key === 'Tab' || e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault(); toMain({ type: 'key', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, repeat: e.repeat }); }
+    return;
+  }
+  onKey(e);
+});
+function onKey(e) {
   const tag = e.target.tagName;
   if (tag === 'INPUT' && e.target.type !== 'checkbox' || tag === 'SELECT' || tag === 'TEXTAREA') { if (e.key === 'Escape') e.target.blur(); return; }
   if ($('#help').style.display === 'flex') { if (e.key === 'Escape' || e.key === '?') showHelp(false); return; }
@@ -350,7 +382,7 @@ addEventListener('keydown', e => {
   if (k.startsWith('Arrow')) {
     e.preventDefault();
     const st = e.shiftKey ? 10 : 1, dx = k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, dy = k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0;
-    if (mode === 'pin') { if (!e.repeat) snapshot(); if (!S.corners) S.corners = corners().map(p => p.slice()); S.corners[pinSel][0] += dx; S.corners[pinSel][1] += dy; updateTransform(); changed(false); }
+    if (mode === 'pin') { if (!e.repeat) snapshot(); ensurePin(); const [ow, oh] = split ? [outW, outH] : [innerWidth, innerHeight]; S.pin[pinSel][0] += dx / ow; S.pin[pinSel][1] += dy / oh; updateTransform(); changed(false); }
     else { const s = active(); if (s && s.points[selV]) { if (!e.repeat) snapshot(); const p = s.points[selV]; p[0] = clamp(p[0] + dx, 0, S.W); p[1] = clamp(p[1] + dy, 0, S.H); changed(false); } }
     return;
   }
@@ -368,7 +400,7 @@ addEventListener('keydown', e => {
     case 'Escape': if (mode === 'play') setMode('edit'); else { selV = -1; updateStatus(); } break;
     default: { const m = { 1: 'edit', 2: 'masks', 3: 'test', 4: 'grid', 5: 'pin', 6: 'demo', 7: 'play' }[k]; if (m) setMode(m); }
   }
-});
+}
 
 // ---------- modes / ui ----------
 function setMode(m) {
@@ -376,12 +408,12 @@ function setMode(m) {
   const was = mode; mode = m; drag = null;
   document.querySelectorAll('#modes [data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
   hit.style.cursor = m === 'edit' || m === 'play' ? 'none' : m === 'pin' ? 'crosshair' : 'default';
-  if (m === 'play' && was !== 'play') { if (!uiOff) toggleUI(true); startShow(); }
+  if (m === 'play' && was !== 'play') { if (!uiOff && !split) toggleUI(true); startShow(); }
   else if (m !== 'play' && was === 'play') { stopShow(); if (uiOff) toggleUI(false); }
   updateStatus();
 }
-function toggleUI(force) { uiOff = typeof force === 'boolean' ? force : !uiOff; document.body.classList.toggle('ui-off', uiOff); updateStatus(); }
-function toggleFull() { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => toast('Fullscreen was blocked by the browser')); }
+function toggleUI(force) { uiOff = typeof force === 'boolean' ? force : !uiOff; document.body.classList.toggle('ui-off', uiOff); if (split) updateTransform(); updateStatus(); }
+function toggleFull() { if (split) return toast('Click the output window once, then press F there for fullscreen'); if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => toast('Fullscreen was blocked by the browser')); }
 function showHelp(on) { $('#help').style.display = on ? 'flex' : 'none'; if (!on) try { localStorage.setItem(KEY + '-help', '1'); } catch (e) {} }
 let toastT = 0;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 2600); }
@@ -568,6 +600,13 @@ function drawPlayMask(c) {
 }
 function drawOverlay() {
   const d = dpr(); octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight);
+  if (split) {
+    const r = viewRect();
+    octx.strokeStyle = '#3ddc84'; octx.lineWidth = 1; octx.setLineDash([6, 4]); octx.strokeRect(r.x - .5, r.y - .5, r.w + 1, r.h + 1); octx.setLineDash([]);
+    octx.font = '12px system-ui'; octx.textAlign = 'left'; octx.textBaseline = 'bottom'; octx.fillStyle = '#3ddc84';
+    const it = mode === 'play' && PL[cur];
+    octx.fillText(`OUTPUT PREVIEW · ${outW}×${outH}${mode === 'play' ? ' · ' + (it ? (paused ? '❚❚ ' : '▶ ') + it.name : 'nothing playing') : ''}`, r.x, r.y - 2 > 12 ? r.y - 2 : r.y + 14);
+  }
   if (mode !== 'pin') return;
   const c = corners();
   octx.strokeStyle = '#ffb020'; octx.lineWidth = 2; octx.beginPath(); c.forEach((p, i) => i ? octx.lineTo(p[0], p[1]) : octx.moveTo(p[0], p[1])); octx.closePath(); octx.stroke();
@@ -578,8 +617,11 @@ function drawOverlay() {
 }
 function frame(ms) {
   const t = ms / 1000, c = ctx, u = Math.max(1, S.W / 1280);
+  if (split) syncOut();
+  if (ROLE === 'output') outputMsg();
   c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.shadowBlur = 0;
-  if (mode === 'play') { tickShow(); drawPlayMask(c); }
+  if (ROLE === 'output' && !gotState) { c.fillStyle = '#000'; c.fillRect(0, 0, S.W, S.H); }
+  else if (mode === 'play') { tickShow(); drawPlayMask(c); }
   else {
     c.fillStyle = mode === 'edit' || mode === 'pin' ? BG[bgLevel] : '#000'; c.fillRect(0, 0, S.W, S.H);
     if (mode === 'edit') drawEdit(c, u);
@@ -637,7 +679,7 @@ function importJSON(file) {
       const o = JSON.parse(r.result);
       if (!Array.isArray(o.shapes) || !o.W || !o.H) throw new Error('Not a Projection Mapper map file');
       snapshot();
-      S = { W: +o.W, H: +o.H, corners: o.corners || null, active: o.shapes.length ? 0 : -1,
+      S = { W: +o.W, H: +o.H, pin: Array.isArray(o.pin) ? o.pin : pinFromPx(o.corners), active: o.shapes.length ? 0 : -1,
         shapes: o.shapes.map((s, i) => ({ id: s.id || uid(), name: String(s.name || 'shape_' + (i + 1)), type: ['polygon','line','points'].includes(s.type) ? s.type : 'polygon',
           role: ['show','block','none'].includes(s.role) ? s.role : 'show', color: /^#[0-9a-f]{6}$/i.test(s.color) ? s.color : PALETTE[i % PALETTE.length],
           visible: s.visible !== false, points: (s.points || []).filter(p => Array.isArray(p) && p.length >= 2).map(p => [+p[0], +p[1]]) })) };
@@ -648,7 +690,8 @@ function importJSON(file) {
 }
 
 // ---------- resolution ----------
-function syncRes() { $('#resW').value = S.W; $('#resH').value = S.H; const [w, h] = screenRes(); $('#screenInfo').textContent = `this screen: ${w}×${h}`; }
+const targetRes = () => split && outScreen ? outScreen : screenRes();
+function syncRes() { $('#resW').value = S.W; $('#resH').value = S.H; const [w, h] = targetRes(); $('#screenInfo').textContent = `${split && outScreen ? 'output window screen' : 'this screen'}: ${w}×${h}`; }
 function applyRes(w, h) {
   w = Math.round(w); h = Math.round(h);
   if (!(w >= 64 && h >= 64 && w <= 8192 && h <= 8192)) return alert('Resolution must be between 64 and 8192');
@@ -657,7 +700,7 @@ function applyRes(w, h) {
   if (S.shapes.some(s => s.points.length) && confirm('Scale existing points to the new resolution?\n\nOK = scale (use when only the resolution changed)\nCancel = keep pixel coordinates as they are')) {
     const sx = w / S.W, sy = h / S.H; S.shapes.forEach(s => s.points = s.points.map(p => [Math.round(p[0] * sx), Math.round(p[1] * sy)]));
   }
-  S.W = w; S.H = h; S.corners = null; updateTransform(); syncRes(); changed(true); renderPlaylist();
+  S.W = w; S.H = h; S.pin = null; updateTransform(); syncRes(); changed(true); renderPlaylist();
 }
 
 // ---------- playlist ----------
@@ -665,7 +708,7 @@ const PKEY = KEY + '-play';
 let PL = [], cur = -1, startIdx = 0, layer = null, advancing = false, paused = false, pausedAt = 0, itemStart = 0, failStreak = 0;
 const P = { hold: 10, fade: 1, loop: true, shuffle: false, mute: false, mask: true };
 try { Object.assign(P, JSON.parse(localStorage.getItem(PKEY)) || {}); } catch (e) {}
-const saveP = () => { try { localStorage.setItem(PKEY, JSON.stringify(P)); } catch (e) {} };
+const saveP = () => { if (ROLE === 'output') return; syncPlaylist(); try { localStorage.setItem(PKEY, JSON.stringify(P)); } catch (e) {} };
 playMask = P.mask;
 $('#holdDef').value = P.hold; $('#fade').value = P.fade; $('#loop').checked = P.loop; $('#shuffle').checked = P.shuffle; $('#mute').checked = P.mute; $('#pmask').checked = P.mask;
 
@@ -678,13 +721,13 @@ const idb = (() => {
     set: (k, v) => open().then(db => new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); })),
   };
 })();
-function savePlaylist() { idb.set('playlist', PL.filter(it => it.handle).map(it => ({ handle: it.handle, name: it.name, hold: it.hold }))).catch(() => {}); }
+function savePlaylist() { if (ROLE === 'output') return; idb.set('playlist', PL.filter(it => it.handle).map(it => ({ handle: it.handle, name: it.name, hold: it.hold }))).catch(() => {}); }
 
 const VEXT = /\.(mp4|m4v|webm|mov|ogv|mkv)$/i, IEXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 function kindOf(f) { return f.type.startsWith('video/') || VEXT.test(f.name) ? 'video' : f.type.startsWith('image/') || IEXT.test(f.name) ? 'image' : null; }
 function addFile(file, handle, hold) {
   const kind = kindOf(file); if (!kind) return false;
-  const it = { id: uid(), name: file.name, kind, url: URL.createObjectURL(file), handle: handle || null, hold: hold || null, w: 0, h: 0, dur: 0 };
+  const it = { id: uid(), name: file.name, kind, file, url: URL.createObjectURL(file), handle: handle || null, hold: hold || null, w: 0, h: 0, dur: 0 };
   PL.push(it);
   if (kind === 'video') { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => { it.w = v.videoWidth; it.h = v.videoHeight; it.dur = v.duration; v.removeAttribute('src'); renderPlaylist(); }; v.onerror = () => { it.err = true; renderPlaylist(); }; v.src = it.url; }
   else { const im = new Image(); im.onload = () => { it.w = im.naturalWidth; it.h = im.naturalHeight; renderPlaylist(); }; im.onerror = () => { it.err = true; renderPlaylist(); }; im.src = it.url; }
@@ -724,7 +767,7 @@ addEventListener('drop', e => {
 
 // restore after reload
 let pending = [];
-async function restore(prompted) {
+async function restorePlaylist(prompted) {
   const list = pending; let ok = 0;
   for (const r of list) {
     try {
@@ -739,17 +782,19 @@ async function restore(prompted) {
   if (ok < list.length) toast(`Restored ${ok} of ${list.length} files (others were moved or deleted)`);
   return true;
 }
-idb.get('playlist').then(async list => {
+if (ROLE !== 'output') idb.get('playlist').then(async list => {
   if (!list || !list.length || PL.length) return;
   pending = list;
   const all = await Promise.all(list.map(r => r.handle.queryPermission({ mode: 'read' }).catch(() => 'denied')));
-  if (all.every(p => p === 'granted')) return restore(false);
+  if (all.every(p => p === 'granted')) return restorePlaylist(false);
   const b = $('#btnRestore'); b.textContent = `Restore playlist (${list.length})`; b.hidden = false;
 }).catch(() => {});
-$('#btnRestore').addEventListener('click', () => restore(true));
+$('#btnRestore').addEventListener('click', () => restorePlaylist(true));
 
 function fmtDur(s) { s = Math.round(s); return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}s`; }
-function renderPlaylist() {
+function renderPlaylist(noSync) {
+  if (ROLE === 'output') { toMain({ type: 'now', cur, paused }); return; }
+  if (!noSync) syncPlaylist();
   const el = $('#playlist');
   if (!PL.length) { el.innerHTML = '<p class="hint">No media yet. Add files, or drag them onto this window.</p>'; return; }
   let total = 0;
@@ -796,11 +841,13 @@ $('#btnPlay').addEventListener('click', () => setMode('play'));
 
 // ---------- show engine ----------
 function startShow() {
+  if (split) { cur = -1; return; } // the output window starts its own show when it sees play mode
   paused = false; failStreak = 0; cur = -1;
   if (PL.length) showItem(P.shuffle ? Math.floor(Math.random() * PL.length) : startIdx);
   renderPlaylist();
 }
 function stopShow() {
+  if (split) { cur = -1; renderPlaylist(true); return; }
   stage.querySelectorAll('.layer').forEach(el => { if (el.pause) el.pause(); el.remove(); });
   layer = null; advancing = false; cur = -1; renderPlaylist();
 }
@@ -810,6 +857,7 @@ function nextIndex() {
   return P.loop ? 0 : -1;
 }
 function advance(dir) {
+  if (split) return toOut({ type: 'cmd', cmd: dir < 0 ? 'prev' : 'next' });
   if (mode !== 'play' || !PL.length) return;
   if (dir < 0) return showItem(cur <= 0 ? PL.length - 1 : cur - 1);
   const n = nextIndex();
@@ -821,6 +869,7 @@ function advance(dir) {
 }
 let showToken = 0;
 function showItem(i) {
+  if (split) return toOut({ type: 'cmd', cmd: 'jump', i });
   if (!PL.length) return;
   i = ((i % PL.length) + PL.length) % PL.length;
   const it = PL[i], token = ++showToken;
@@ -853,10 +902,12 @@ function showItem(i) {
   setTimeout(() => { if (!started) (el.readyState > 0 || el.complete ? go : fail)(); }, 5000);
 }
 function togglePause() {
+  if (split) return toOut({ type: 'cmd', cmd: 'pause' });
   if (!layer) return;
   paused = !paused;
   if (layer.tagName === 'VIDEO') paused ? layer.pause() : layer.play().catch(() => {});
   else if (paused) pausedAt = performance.now(); else itemStart += performance.now() - pausedAt;
+  renderPlaylist(true);
 }
 function tickShow() {
   if (mode !== 'play' || paused || advancing || !layer || cur < 0) return;
@@ -871,6 +922,95 @@ function tickShow() {
   if (remain <= Math.min(P.fade, 0.5 * len)) advance(1);
 }
 
+
+// ---------- separate output window ----------
+// The main window keeps all controls; the output window (same file, #output) only renders.
+// They talk with postMessage, which also works when the file is opened from disk.
+const MSG = 'projection-mapper';
+const toOut = m => { if (outWin && !outWin.closed) outWin.postMessage({ app: MSG, ...m }, '*'); };
+const toMain = m => { if (window.opener) try { window.opener.postMessage({ app: MSG, ...m }, '*'); } catch (e) {} };
+let lastSent = '';
+function syncOut() {
+  const json = JSON.stringify({ S, mode, selV, bgLevel, showCross, mouse, demo, playMask });
+  if (json !== lastSent) { lastSent = json; toOut({ type: 'state', json }); }
+}
+function syncPlaylist() {
+  if (!split) return;
+  toOut({ type: 'playlist', items: PL.map(({ id, name, kind, hold, file }) => ({ id, name, kind, hold, file })), P: { ...P }, startIdx });
+}
+function setSplit(on) {
+  split = on;
+  $('#btnOut').classList.toggle('on', on);
+  $('#btnOut').textContent = on ? '⧉ Close output window' : '⧉ Open separate output window';
+  $('#outInfo').textContent = on ? 'Output window connected. Click the preview here to map; the crosshair shows on the projector. Press F in the output window for fullscreen.' : 'Optional: keep these controls on the laptop and send only the projection to the projector.';
+  if (!on && mode === 'play') { cur = -1; setMode('edit'); }
+  if (on && uiOff) toggleUI(false);
+  lastSent = ''; mouse = null; if (!on) outScreen = null; updateTransform(); syncRes(); renderPlaylist();
+}
+async function openOutput() {
+  if (split) { if (outWin && !outWin.closed) outWin.close(); outWin = null; setSplit(false); return; }
+  outWin = window.open(location.href.split('#')[0] + '#output', 'projection-mapper-output', 'popup,width=960,height=540');
+  if (!outWin) return toast('The browser blocked the window. Allow pop-ups for this page and try again.');
+  toast('Output window opened. Drag it to the projector and press F in it.');
+  try { // Chrome/Edge: offer to place it on the second screen automatically
+    if (window.getScreenDetails) {
+      const sd = await getScreenDetails(), other = sd.screens.find(x => x !== sd.currentScreen);
+      if (other && outWin && !outWin.closed) { outWin.moveTo(other.availLeft, other.availTop); outWin.resizeTo(other.availWidth, other.availHeight); }
+    }
+  } catch (e) {}
+}
+addEventListener('message', e => {
+  const d = e.data; if (!d || d.app !== MSG) return;
+  if (ROLE === 'main') {
+    if (d.type === 'hello') {
+      if (!outWin || outWin.closed || e.source !== outWin) outWin = e.source;
+      const changedSize = d.w !== outW || d.h !== outH; outW = d.w; outH = d.h;
+      if (!outScreen || outScreen[0] !== d.sw || outScreen[1] !== d.sh) { outScreen = [d.sw, d.sh]; syncRes(); }
+      if (!split) setSplit(true); else if (changedSize) updateTransform();
+      if (d.fresh) { lastSent = ''; syncPlaylist(); }
+    } else if (e.source === outWin) {
+      if (d.type === 'now') { cur = d.cur; paused = d.paused; renderPlaylist(true); }
+      else if (d.type === 'key') onKey({ ...d, target: document.body, preventDefault() {} });
+    }
+    return;
+  }
+  if (e.source !== window.opener) return;
+  if (d.type === 'state') {
+    const o = JSON.parse(d.json), was = mode, resized = !gotState || o.S.W !== S.W || o.S.H !== S.H || JSON.stringify(o.S.pin) !== JSON.stringify(S.pin);
+    ({ S, selV, bgLevel, showCross, mouse, demo, playMask } = o); mode = o.mode; gotState = true;
+    if (resized) updateTransform();
+    if (mode === 'play' && was !== 'play') startShow(); else if (mode !== 'play' && was === 'play') stopShow();
+  } else if (d.type === 'playlist') {
+    const old = new Map(PL.map(it => [it.id, it]));
+    PL = d.items.map(it => { const o = old.get(it.id); old.delete(it.id); return { ...it, url: o ? o.url : URL.createObjectURL(it.file) }; });
+    old.forEach(it => setTimeout(() => URL.revokeObjectURL(it.url), 15000));
+    Object.assign(P, d.P); startIdx = d.startIdx;
+    if (cur >= PL.length) cur = PL.length - 1;
+  } else if (d.type === 'cmd') {
+    if (d.cmd === 'next') advance(1); else if (d.cmd === 'prev') advance(-1);
+    else if (d.cmd === 'pause') togglePause(); else if (d.cmd === 'jump') showItem(d.i);
+  }
+});
+function outputMsg() {
+  const m = $('#outMsg'), full = !!document.fullscreenElement;
+  const txt = !window.opener ? 'This is the output window, but its control window is gone.<small>Close this and use "Open separate output window" again.</small>'
+    : !gotState ? 'Waiting for the control window…' : !full ? 'Click here to go fullscreen<small>Drag this window onto the projector first. Press F to toggle.</small>' : '';
+  if (m.dataset.t !== txt) { m.dataset.t = txt; m.innerHTML = txt; m.style.display = txt ? 'flex' : 'none'; }
+}
+if (ROLE === 'output') {
+  document.body.classList.add('role-output'); document.title = 'Projection Mapper · Output';
+  hit.style.cursor = 'none';
+  $('#outMsg').addEventListener('click', () => { if (gotState) document.documentElement.requestFullscreen().catch(() => {}); });
+  const hello = fresh => toMain({ type: 'hello', w: innerWidth, h: innerHeight, sw: Math.round(screen.width * dpr()), sh: Math.round(screen.height * dpr()), fresh });
+  hello(true); setInterval(() => hello(false), 1500); // heartbeat: re-links if the control window reloads
+  addEventListener('resize', () => hello(false));
+  document.addEventListener('fullscreenchange', () => setTimeout(() => hello(false), 100));
+} else {
+  $('#btnOut').addEventListener('click', openOutput);
+  setInterval(() => { if (split && (!outWin || outWin.closed)) { outWin = null; setSplit(false); toast('Output window closed'); } }, 1000);
+  addEventListener('beforeunload', () => { if (outWin && !outWin.closed) outWin.close(); });
+}
+
 // ---------- wire up ----------
 document.querySelectorAll('#modes [data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('#btnFull').addEventListener('click', toggleFull);
@@ -882,8 +1022,8 @@ $('#cross').addEventListener('change', e => showCross = e.target.checked);
 $('#btnNew').addEventListener('click', () => newShape());
 $('#btnTemplate').addEventListener('click', addTemplate);
 $('#btnRes').addEventListener('click', () => applyRes(+$('#resW').value, +$('#resH').value));
-$('#btnScreen').addEventListener('click', () => { const [w, h] = screenRes(); applyRes(w, h); });
-$('#btnPinReset').addEventListener('click', () => { snapshot(); S.corners = null; updateTransform(); changed(false); });
+$('#btnScreen').addEventListener('click', () => { const [w, h] = targetRes(); applyRes(w, h); });
+$('#btnPinReset').addEventListener('click', () => { snapshot(); S.pin = null; updateTransform(); changed(false); });
 $('#demo').addEventListener('change', e => { demo = e.target.value; setMode('demo'); });
 $('#exSvg').addEventListener('click', exportSVG);
 $('#exPng').addEventListener('click', exportGuide);
@@ -897,7 +1037,7 @@ document.addEventListener('fullscreenchange', () => setTimeout(updateTransform, 
 
 syncRes(); updateTransform(); renderShapes(); setMode('edit'); updateStatus();
 let seen = false; try { seen = !!localStorage.getItem(KEY + '-help'); } catch (e) {}
-if (!seen) showHelp(true);
+if (!seen && ROLE !== 'output') showHelp(true);
 requestAnimationFrame(frame);
 })();
 </script>
