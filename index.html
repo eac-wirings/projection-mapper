@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Projection Mapper</title>
+<style>
+:root{--panel:rgba(20,22,28,.95);--line:#343844;--text:#e8eaf0;--muted:#9aa0ad;--accent:#ffb020;--danger:#ff5a5a;--btn:#2a2e38;--btnh:#363b47}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#000;color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}
+#stage{position:absolute;left:0;top:0;transform-origin:0 0;background:#000;overflow:hidden}
+#stage .layer{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;opacity:0;transition-property:opacity;transition-timing-function:linear}
+.pl{display:grid;grid-template-columns:18px 1fr auto 22px 22px 22px;gap:4px;align-items:center;padding:3px 4px;border-radius:6px;border:1px solid transparent;cursor:pointer;font-size:12px}
+.pl.start{border-color:var(--line)}
+.pl.now{border-color:var(--accent);background:rgba(255,176,32,.1)}
+.pl .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl .meta{color:var(--muted);font-size:11px;white-space:nowrap;text-align:right}
+.pl .meta.bad{color:var(--danger)}
+.pl .meta input{width:44px;padding:1px 3px;font-size:11px}
+.pl button{padding:1px 0;font-size:11px}
+.pl .ix{color:var(--muted);font-size:11px}
+body.dragging #panel{outline:3px dashed var(--accent)}
+#map{position:absolute;inset:0;width:100%;height:100%}
+#overlay{position:fixed;inset:0;pointer-events:none;z-index:2}
+#hit{position:fixed;inset:0;z-index:3;cursor:none;touch-action:none}
+#panel{position:fixed;top:8px;right:8px;bottom:8px;width:340px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:auto;padding:10px 12px 14px;z-index:10}
+#panel header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+#panel header b{font-size:15px;flex:1}
+#panel h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px;font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0}
+button,select,input{font:inherit;color:var(--text)}
+button{background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:5px 9px;cursor:pointer}
+button:hover{background:var(--btnh)}
+button.on{background:var(--accent);color:#111;border-color:var(--accent)}
+button.primary{background:var(--accent);color:#111;border-color:var(--accent);font-weight:600;width:100%;margin-top:6px;padding:8px}
+select,input[type=number],input[type=text]{background:#0f1116;border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+input[type=number]{width:78px}
+input[type=color]{width:26px;height:24px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}
+input[type=file]{font-size:12px;max-width:100%}
+label.chk{display:flex;gap:6px;align-items:center;margin:4px 0;cursor:pointer}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.seg button{padding:5px 4px;font-size:12px}
+.hint{color:var(--muted);font-size:12px;margin:4px 0}
+.shape{display:grid;grid-template-columns:26px 1fr 62px 58px 26px 24px 24px;gap:4px;align-items:center;padding:4px;border-radius:6px;border:1px solid transparent;cursor:pointer}
+.shape.active{border-color:var(--accent);background:rgba(255,176,32,.08)}
+.shape input.name{width:100%;min-width:0}
+.shape select{padding:3px 2px;font-size:12px;min-width:0}
+.shape .count{color:var(--muted);font-size:11px;text-align:right}
+.shape button{padding:2px 0;font-size:12px}
+.shape.hidden .name{opacity:.45}
+.status{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--muted);margin-top:6px;white-space:pre}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+kbd{background:#0f1116;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font:11px ui-monospace,Menlo,Consolas,monospace}
+table.keys{width:100%;border-collapse:collapse;font-size:12px}
+table.keys td{padding:2px 0;vertical-align:top}
+table.keys td:first-child{white-space:nowrap;padding-right:8px}
+#hud{position:fixed;left:10px;bottom:10px;z-index:9;font:12px ui-monospace,Menlo,Consolas,monospace;color:#bbb;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:6px;pointer-events:none;display:none}
+#help{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;padding:16px}
+#help .card{background:#15171c;border:1px solid var(--line);border-radius:12px;max-width:640px;width:100%;max-height:100%;overflow:auto;padding:18px 22px}
+#help h2{margin:0 0 8px;font-size:18px}
+#help ol{padding-left:20px}
+#help li{margin:6px 0}
+#toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--accent);color:#111;padding:6px 12px;border-radius:6px;z-index:30;font-weight:600;display:none}
+body.ui-off #panel,body.ui-off #hud{display:none!important}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="map"></canvas>
+</div>
+<canvas id="overlay"></canvas>
+<div id="hit"></div>
+<div id="hud"></div>
+<div id="toast"></div>
+
+<div id="panel">
+  <header><b>Projection Mapper</b><span class="hint" id="resBadge"></span><button id="btnHelp" title="Help (?)">?</button><button id="btnHide" title="Hide UI (H)">Hide</button></header>
+
+  <h3>Mode</h3>
+  <div class="seg" id="modes">
+    <button data-mode="edit">1 Map</button>
+    <button data-mode="masks">2 Masks</button>
+    <button data-mode="test">3 Test</button>
+    <button data-mode="grid">4 Grid</button>
+    <button data-mode="pin">5 Pin</button>
+    <button data-mode="demo">6 Demo</button>
+    <button data-mode="play">7 Play</button>
+    <button id="btnFull" title="Fullscreen (F)">⛶ Full</button>
+  </div>
+  <div class="row">
+    <label>Light on house
+      <select id="bg"><option value="0">Black</option><option value="1">Dim</option><option value="2">Medium</option><option value="3">White</option></select>
+    </label>
+    <label class="chk"><input type="checkbox" id="cross" checked> Crosshair</label>
+  </div>
+
+  <h3>Shapes</h3>
+  <div class="row"><button id="btnNew">+ New shape</button><button id="btnTemplate">+ House template</button></div>
+  <div id="shapes"></div>
+  <div class="status" id="status"></div>
+
+  <h3>Projector resolution</h3>
+  <div class="row"><input type="number" id="resW" min="64" max="8192"> × <input type="number" id="resH" min="64" max="8192"><button id="btnRes">Apply</button></div>
+  <div class="row"><button id="btnScreen">Use this screen</button><span class="hint" id="screenInfo"></span></div>
+  <p class="hint">Set this to the projector's native resolution and make all content at exactly this size.</p>
+
+  <h3>Corner pin</h3>
+  <p class="hint">If the projector gets bumped, switch to <b>5 Pin</b> and drag the four corners until the map lines up with the house again. The map and the playback both warp with it.</p>
+  <button id="btnPinReset">Reset corners</button>
+
+  <h3>Demo effects</h3>
+  <select id="demo">
+    <option value="trace">Neon outline trace</option>
+    <option value="rainbow">Rainbow fills</option>
+    <option value="pulse">Breathing pulse</option>
+    <option value="lightning">Lightning storm</option>
+    <option value="sweep">Light sweep</option>
+    <option value="fire">Fire glow</option>
+  </select>
+
+  <h3>Playlist</h3>
+  <div class="row"><button id="btnAdd">+ Add videos / images</button><button id="btnRestore" hidden>Restore playlist</button><button id="btnClearPl">Clear</button></div>
+  <input type="file" id="media" accept="video/*,image/*" multiple hidden>
+  <div id="playlist"><p class="hint">No media yet. Add files, or drag them onto this window.</p></div>
+  <div class="row">
+    <label>Image time <input type="number" id="holdDef" min="1" max="3600" step="1" value="10"> s</label>
+    <label>Crossfade <input type="number" id="fade" min="0" max="10" step="0.5" value="1"> s</label>
+  </div>
+  <label class="chk"><input type="checkbox" id="loop" checked> Loop the playlist</label>
+  <label class="chk"><input type="checkbox" id="shuffle"> Shuffle</label>
+  <label class="chk"><input type="checkbox" id="mute"> Mute video audio</label>
+  <label class="chk"><input type="checkbox" id="pmask" checked> Black out everything except "Show" shapes</label>
+  <button class="primary" id="btnPlay">▶ Play (Esc to stop)</button>
+  <p class="hint">While playing: <kbd>→</kbd> next, <kbd>←</kbd> previous, <kbd>Space</kbd> pause. Click a row to choose where the show starts.</p>
+
+  <h3>Export for making content</h3>
+  <div class="grid2">
+    <button id="exSvg">SVG guide</button>
+    <button id="exPng">PNG guide</button>
+    <button id="exColor">PNG color map</button>
+    <button id="exMasks">PNG masks (each)</button>
+    <button id="exJson">Save map .json</button>
+    <button id="imJsonBtn">Load map .json</button>
+  </div>
+  <input type="file" id="imJson" accept="application/json,.json" hidden>
+
+  <h3>Keys</h3>
+  <table class="keys">
+    <tr><td>Click</td><td>Add point (after the selected one)</td></tr>
+    <tr><td>Drag point</td><td>Move it</td></tr>
+    <tr><td><kbd>Alt</kbd>+click edge</td><td>Insert a point on the edge</td></tr>
+    <tr><td><kbd>←↑→↓</kbd></td><td>Nudge 1 px (<kbd>Shift</kbd> = 10 px)</td></tr>
+    <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>Select previous / next point</td></tr>
+    <tr><td><kbd>Del</kbd></td><td>Delete selected point</td></tr>
+    <tr><td><kbd>N</kbd> / <kbd>Tab</kbd></td><td>New shape / next shape</td></tr>
+    <tr><td><kbd>1</kbd>–<kbd>7</kbd></td><td>Switch mode</td></tr>
+    <tr><td><kbd>B</kbd> / <kbd>C</kbd></td><td>Cycle light on house / crosshair</td></tr>
+    <tr><td><kbd>H</kbd> / <kbd>F</kbd></td><td>Hide UI / fullscreen</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo (<kbd>Shift</kbd> = redo)</td></tr>
+    <tr><td><kbd>Space</kbd> / <kbd>Esc</kbd></td><td>Pause playback / stop, deselect</td></tr>
+  </table>
+</div>
+
+<div id="help"><div class="card">
+  <h2>Projection Mapper</h2>
+  <ol>
+    <li>Connect the projector, set it to <b>extend</b> the desktop, and drag this browser window onto it. Press <kbd>F</kbd> for fullscreen.</li>
+    <li>Set <b>Projector resolution</b> to the projector's native size (try <i>Use this screen</i>). Turn projector keystone <b>off</b>, then focus and zoom using <b>4 Grid</b>. After this, don't touch the projector.</li>
+    <li>In <b>1 Map</b>, press <kbd>B</kbd> to light the house dimly. Click <b>+ House template</b>, or press <kbd>N</kbd> for a new shape. Select a shape, then click its corners on the real house. Use the arrow keys for pixel-exact nudges.</li>
+    <li>Check alignment with <b>2 Masks</b> and <b>3 Test</b>. Set each shape's role: <b>Show</b> (content plays here), <b>Block</b> (forced black, e.g. windows) or <b>—</b> (guide only).</li>
+    <li><b>Export</b> the SVG/PNG guides and make your content at exactly the projector resolution, using the guide as a reference layer.</li>
+    <li>Add your videos and images to the <b>Playlist</b> and press Play. Items rotate with crossfades. If the projector moved, fix it with <b>5 Pin</b> without remapping.</li>
+  </ol>
+  <p class="hint">Your map autosaves in this browser. Use <b>Save map .json</b> to keep a backup.</p>
+  <button class="primary" id="helpClose">Got it</button>
+</div></div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const stage = $('#stage'), map = $('#map'), ctx = map.getContext('2d');
+const ov = $('#overlay'), octx = ov.getContext('2d');
+const hit = $('#hit');
+const PALETTE = ['#ff3b3b','#ffb020','#ffe14d','#3ddc84','#27c4ff','#4d6bff','#b45cff','#ff5cc8','#7fffd4','#ffffff'];
+const BG = ['#000','#262626','#666','#fff'];
+const KEY = 'house-mapper-v1';
+const dpr = () => window.devicePixelRatio || 1;
+const screenRes = () => [Math.round(screen.width * dpr()), Math.round(screen.height * dpr())];
+
+let S = { W: screenRes()[0], H: screenRes()[1], corners: null, shapes: [], active: -1 };
+let mode = 'edit', selV = -1, bgLevel = 0, showCross = true, mouse = null, drag = null, pinSel = 0;
+let H = [1,0,0,0,1,0,0,0,1], Hi = H;
+let demo = 'trace', playMask = true, uiOff = false;
+const undoStack = [], redoStack = [];
+
+// ---------- persistence ----------
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.shapes)) S = Object.assign(S, s); } catch (e) {}
+let saveT = 0;
+function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }, 250); }
+
+// ---------- math ----------
+function solveH(src, dst) {
+  const A = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y, u]);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y, v]);
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]];
+    const d = A[c][c] || 1e-12;
+    for (let k = c; k < 9; k++) A[c][k] /= d;
+    for (let r = 0; r < 8; r++) if (r !== c) { const f = A[r][c]; if (f) for (let k = c; k < 9; k++) A[r][k] -= f * A[c][k]; }
+  }
+  return [...A.map(r => r[8]), 1];
+}
+function inv3(m) {
+  const [a,b,c,d,e,f,g,h,i] = m;
+  const A = e*i - f*h, B = -(d*i - f*g), C = d*h - e*g, det = a*A + b*B + c*C;
+  return [A/det, -(b*i - c*h)/det, (b*f - c*e)/det, B/det, (a*i - c*g)/det, -(a*f - c*d)/det, C/det, -(a*h - b*g)/det, (a*e - b*d)/det];
+}
+function applyH(h, x, y) { const w = h[6]*x + h[7]*y + h[8]; return [(h[0]*x + h[1]*y + h[2]) / w, (h[3]*x + h[4]*y + h[5]) / w]; }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- stage transform ----------
+function defaultCorners() {
+  const vw = innerWidth, vh = innerHeight, s = Math.min(vw / S.W, vh / S.H), w = S.W * s, h = S.H * s, x = (vw - w) / 2, y = (vh - h) / 2;
+  return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+}
+const corners = () => S.corners || defaultCorners();
+function updateTransform() {
+  H = solveH([[0,0],[S.W,0],[S.W,S.H],[0,S.H]], corners()); Hi = inv3(H);
+  stage.style.width = S.W + 'px'; stage.style.height = S.H + 'px';
+  stage.style.transform = `matrix3d(${H[0]},${H[3]},0,${H[6]},${H[1]},${H[4]},0,${H[7]},0,0,1,0,${H[2]},${H[5]},0,${H[8]})`;
+  if (map.width !== S.W || map.height !== S.H) { map.width = S.W; map.height = S.H; }
+  ov.width = Math.round(innerWidth * dpr()); ov.height = Math.round(innerHeight * dpr());
+}
+const toContent = (cx, cy) => applyH(Hi, cx, cy);
+function tolerance() { const c = corners(); const s = Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]) / S.W; return 12 / (s || 1); }
+
+// ---------- shapes ----------
+const uid = () => Math.random().toString(36).slice(2, 9);
+const closed = s => s.type === 'polygon' && s.points.length > 2;
+const active = () => S.shapes[S.active];
+function makeShape(name, type = 'polygon', role = 'show') {
+  return { id: uid(), name, type, role, color: PALETTE[S.shapes.length % PALETTE.length], points: [], visible: true };
+}
+function newShape(name) {
+  if (!name) name = prompt('Name for the new shape (e.g. gable, window_left):', 'shape_' + (S.shapes.length + 1));
+  if (name === null) return;
+  snapshot();
+  S.shapes.push(makeShape(name || 'shape_' + (S.shapes.length + 1)));
+  S.active = S.shapes.length - 1; selV = -1; changed(true);
+}
+function addTemplate() {
+  snapshot();
+  const t = [
+    ['gable_outline','polygon','show'], ['trim_diagonal','line','none'], ['roofline','line','none'],
+    ['window_upper_L','polygon','block'], ['window_upper_R','polygon','block'],
+    ['siding_lower','polygon','show'], ['window_bank','polygon','block'],
+    ['stone_left','polygon','show'], ['stone_right','polygon','show'], ['entry_glass','polygon','block'],
+  ];
+  const have = new Set(S.shapes.map(s => s.name));
+  for (const [n, ty, r] of t) if (!have.has(n)) S.shapes.push(makeShape(n, ty, r));
+  if (S.active < 0 && S.shapes.length) S.active = 0;
+  changed(true); toast('Template added. Select a shape and click its corners on the house.');
+}
+
+// ---------- undo ----------
+const snapState = () => JSON.stringify({ shapes: S.shapes, corners: S.corners, active: S.active });
+function snapshot() { undoStack.push(snapState()); if (undoStack.length > 300) undoStack.shift(); redoStack.length = 0; }
+function restore(str) { const o = JSON.parse(str); S.shapes = o.shapes; S.corners = o.corners; S.active = o.active; selV = -1; updateTransform(); changed(true); }
+function undo() { if (undoStack.length) { redoStack.push(snapState()); restore(undoStack.pop()); } }
+function redo() { if (redoStack.length) { undoStack.push(snapState()); restore(redoStack.pop()); } }
+
+function changed(structural) { save(); if (structural) renderShapes(); updateStatus(); }
+
+// ---------- hit testing ----------
+function hitVertex(x, y, tol) {
+  let best = null, bd = tol;
+  const order = S.shapes.map((s, i) => i).sort((a, b) => (b === S.active) - (a === S.active));
+  for (const si of order) {
+    const s = S.shapes[si]; if (!s.visible) continue;
+    s.points.forEach((p, vi) => { const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; best = { s: si, v: vi }; } });
+    if (best && si === S.active) return best;
+  }
+  return best;
+}
+function nearestSeg(s, x, y, tol) {
+  const P = s.points, n = P.length; if (n < 2) return null;
+  let best = null, bd = tol;
+  const segs = s.type === 'polygon' ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = P[i], b = P[(i + 1) % n], dx = b[0] - a[0], dy = b[1] - a[1], L = dx*dx + dy*dy || 1;
+    const t = clamp(((x - a[0]) * dx + (y - a[1]) * dy) / L, 0, 1), px = a[0] + t*dx, py = a[1] + t*dy, d = Math.hypot(px - x, py - y);
+    if (d < bd) { bd = d; best = { i, x: px, y: py }; }
+  }
+  return best;
+}
+
+// ---------- pointer ----------
+hit.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  hit.setPointerCapture(e.pointerId);
+  if (mode === 'pin') {
+    const c = corners(); let best = -1, bd = 40;
+    c.forEach((p, i) => { const d = Math.hypot(p[0] - e.clientX, p[1] - e.clientY); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0) { snapshot(); if (!S.corners) S.corners = c.map(p => p.slice()); pinSel = best; drag = { kind: 'pin', ox: e.clientX - S.corners[best][0], oy: e.clientY - S.corners[best][1] }; }
+    return;
+  }
+  if (mode !== 'edit') return;
+  const [x, y] = toContent(e.clientX, e.clientY), tol = tolerance();
+  const hv = hitVertex(x, y, tol);
+  if (hv) { snapshot(); const sw = hv.s !== S.active; S.active = hv.s; selV = hv.v; drag = { kind: 'v' }; changed(sw); return; }
+  let s = active();
+  if (!s) { snapshot(); S.shapes.push(makeShape('shape_' + (S.shapes.length + 1))); S.active = S.shapes.length - 1; s = active(); renderShapes(); }
+  else snapshot();
+  if (!s.visible) s.visible = true;
+  const r = v => Math.round(v);
+  if (e.altKey) {
+    const seg = nearestSeg(s, x, y, tol * 1.5);
+    if (seg) { s.points.splice(seg.i + 1, 0, [r(seg.x), r(seg.y)]); selV = seg.i + 1; drag = { kind: 'v' }; changed(true); return; }
+  }
+  const at = selV >= 0 && selV < s.points.length ? selV + 1 : s.points.length;
+  s.points.splice(at, 0, [r(clamp(x, 0, S.W)), r(clamp(y, 0, S.H))]); selV = at; drag = { kind: 'v' }; changed(true);
+});
+hit.addEventListener('pointermove', e => {
+  mouse = toContent(e.clientX, e.clientY);
+  if (!drag) return;
+  if (drag.kind === 'v') { const s = active(); if (s && s.points[selV]) s.points[selV] = [Math.round(clamp(mouse[0], 0, S.W)), Math.round(clamp(mouse[1], 0, S.H))]; updateStatus(); }
+  else if (drag.kind === 'pin') { S.corners[pinSel] = [e.clientX - drag.ox, e.clientY - drag.oy]; updateTransform(); }
+});
+const endDrag = () => { if (drag) { drag = null; changed(false); } };
+hit.addEventListener('pointerup', endDrag);
+hit.addEventListener('pointercancel', endDrag);
+hit.addEventListener('pointerleave', () => { if (!drag) mouse = null; });
+
+// ---------- keyboard ----------
+addEventListener('keydown', e => {
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' && e.target.type !== 'checkbox' || tag === 'SELECT' || tag === 'TEXTAREA') { if (e.key === 'Escape') e.target.blur(); return; }
+  if ($('#help').style.display === 'flex') { if (e.key === 'Escape' || e.key === '?') showHelp(false); return; }
+  const k = e.key, mod = e.ctrlKey || e.metaKey;
+  if (mod && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && k.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (mod) return;
+  if (mode === 'play' && (k === 'ArrowRight' || k === 'ArrowLeft')) { e.preventDefault(); advance(k === 'ArrowRight' ? 1 : -1); return; }
+  if (k.startsWith('Arrow')) {
+    e.preventDefault();
+    const st = e.shiftKey ? 10 : 1, dx = k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, dy = k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0;
+    if (mode === 'pin') { if (!e.repeat) snapshot(); if (!S.corners) S.corners = corners().map(p => p.slice()); S.corners[pinSel][0] += dx; S.corners[pinSel][1] += dy; updateTransform(); changed(false); }
+    else { const s = active(); if (s && s.points[selV]) { if (!e.repeat) snapshot(); const p = s.points[selV]; p[0] = clamp(p[0] + dx, 0, S.W); p[1] = clamp(p[1] + dy, 0, S.H); changed(false); } }
+    return;
+  }
+  switch (k) {
+    case 'Delete': case 'Backspace': { const s = active(); if (s && s.points[selV]) { e.preventDefault(); snapshot(); s.points.splice(selV, 1); selV = Math.min(selV, s.points.length - 1); changed(true); } break; }
+    case '[': case ']': { const s = active(); if (s && s.points.length) { const n = s.points.length; selV = ((selV < 0 ? 0 : selV) + (k === ']' ? 1 : -1) + n) % n; updateStatus(); } break; }
+    case 'Tab': e.preventDefault(); if (S.shapes.length) { S.active = (S.active + (e.shiftKey ? -1 : 1) + S.shapes.length) % S.shapes.length; selV = -1; changed(true); } break;
+    case 'n': case 'N': newShape(); break;
+    case 'b': case 'B': bgLevel = (bgLevel + 1) % BG.length; $('#bg').value = bgLevel; break;
+    case 'c': case 'C': showCross = !showCross; $('#cross').checked = showCross; break;
+    case 'h': case 'H': toggleUI(); break;
+    case 'f': case 'F': toggleFull(); break;
+    case '?': showHelp(true); break;
+    case ' ': if (mode === 'play') { e.preventDefault(); togglePause(); } break;
+    case 'Escape': if (mode === 'play') setMode('edit'); else { selV = -1; updateStatus(); } break;
+    default: { const m = { 1: 'edit', 2: 'masks', 3: 'test', 4: 'grid', 5: 'pin', 6: 'demo', 7: 'play' }[k]; if (m) setMode(m); }
+  }
+});
+
+// ---------- modes / ui ----------
+function setMode(m) {
+  if (m === 'play' && !PL.length && !confirm('The playlist is empty. Play anyway (shows just the playback mask)?')) return;
+  const was = mode; mode = m; drag = null;
+  document.querySelectorAll('#modes [data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  hit.style.cursor = m === 'edit' || m === 'play' ? 'none' : m === 'pin' ? 'crosshair' : 'default';
+  if (m === 'play' && was !== 'play') { if (!uiOff) toggleUI(true); startShow(); }
+  else if (m !== 'play' && was === 'play') { stopShow(); if (uiOff) toggleUI(false); }
+  updateStatus();
+}
+function toggleUI(force) { uiOff = typeof force === 'boolean' ? force : !uiOff; document.body.classList.toggle('ui-off', uiOff); updateStatus(); }
+function toggleFull() { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => toast('Fullscreen was blocked by the browser')); }
+function showHelp(on) { $('#help').style.display = on ? 'flex' : 'none'; if (!on) try { localStorage.setItem(KEY + '-help', '1'); } catch (e) {} }
+let toastT = 0;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 2600); }
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function renderShapes() {
+  const el = $('#shapes');
+  if (!S.shapes.length) { el.innerHTML = '<p class="hint">No shapes yet. Click on the house to start one, or add the house template.</p>'; return; }
+  el.innerHTML = S.shapes.map((s, i) => `
+    <div class="shape${i === S.active ? ' active' : ''}${s.visible ? '' : ' hidden'}" data-i="${i}">
+      <input type="color" value="${esc(s.color)}" data-f="color" title="Color">
+      <input type="text" class="name" value="${esc(s.name)}" data-f="name" title="Name">
+      <select data-f="type" title="Shape type">
+        <option value="polygon"${s.type === 'polygon' ? ' selected' : ''}>Area</option>
+        <option value="line"${s.type === 'line' ? ' selected' : ''}>Line</option>
+        <option value="points"${s.type === 'points' ? ' selected' : ''}>Points</option>
+      </select>
+      <select data-f="role" title="Playback role: Show = content visible, Block = forced black, — = guide only">
+        <option value="show"${s.role === 'show' ? ' selected' : ''}>Show</option>
+        <option value="block"${s.role === 'block' ? ' selected' : ''}>Block</option>
+        <option value="none"${s.role === 'none' ? ' selected' : ''}>—</option>
+      </select>
+      <span class="count" title="Points">${s.points.length}</span>
+      <button data-a="vis" title="Show/hide">${s.visible ? '◉' : '○'}</button>
+      <button data-a="del" title="Delete shape">✕</button>
+    </div>`).join('');
+}
+$('#shapes').addEventListener('click', e => {
+  const row = e.target.closest('.shape'); if (!row) return;
+  const i = +row.dataset.i, s = S.shapes[i], a = e.target.dataset.a;
+  if (a === 'del') { if (confirm(`Delete "${s.name}"?`)) { snapshot(); S.shapes.splice(i, 1); S.active = Math.min(S.active, S.shapes.length - 1); selV = -1; changed(true); } return; }
+  if (a === 'vis') { snapshot(); s.visible = !s.visible; changed(true); return; }
+  if (S.active !== i) { S.active = i; selV = -1; changed(true); }
+});
+$('#shapes').addEventListener('change', e => {
+  const row = e.target.closest('.shape'), f = e.target.dataset.f; if (!row || !f) return;
+  snapshot(); S.shapes[+row.dataset.i][f] = e.target.value || S.shapes[+row.dataset.i][f]; changed(f !== 'color');
+});
+$('#shapes').addEventListener('input', e => { if (e.target.dataset.f === 'color') { const row = e.target.closest('.shape'); S.shapes[+row.dataset.i].color = e.target.value; } });
+
+function updateStatus() {
+  const s = active(), p = s && s.points[selV];
+  const lines = [
+    `mouse   ${mouse ? Math.round(mouse[0]) + ', ' + Math.round(mouse[1]) : '—'}`,
+    `shape   ${s ? s.name + ' (' + s.points.length + ' pts)' : '—'}`,
+    `point   ${p ? '#' + selV + '  ' + p[0] + ', ' + p[1] : '—'}`,
+  ];
+  $('#status').textContent = lines.join('\n');
+  $('#resBadge').textContent = `${S.W}×${S.H}`;
+  const hud = $('#hud');
+  hud.style.display = uiOff && mode !== 'play' ? 'block' : 'none';
+  hud.textContent = `${mode.toUpperCase()} · ${s ? s.name : 'no shape'}${p ? ' · #' + selV + ' ' + p[0] + ',' + p[1] : ''} · H = menu`;
+}
+
+// ---------- drawing ----------
+function pathFor(c, s) {
+  c.beginPath();
+  s.points.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]));
+  if (closed(s)) c.closePath();
+}
+function centroid(s) {
+  const P = s.points; if (!P.length) return [0, 0];
+  let x = 0, y = 0; P.forEach(p => { x += p[0]; y += p[1]; }); return [x / P.length, y / P.length];
+}
+function drawShape(c, s, o) {
+  const u = o.u;
+  if (s.type === 'points') { s.points.forEach(p => { c.beginPath(); c.arc(p[0], p[1], o.r || 6 * u, 0, 7); o.fill ? (c.fillStyle = o.fill, c.fill()) : (c.strokeStyle = o.stroke, c.lineWidth = o.lw, c.stroke()); }); return; }
+  if (s.points.length < 2) return;
+  pathFor(c, s);
+  if (o.fill && closed(s)) { c.fillStyle = o.fill; c.fill(); }
+  if (o.stroke) { c.strokeStyle = o.stroke; c.lineWidth = o.lw; c.lineJoin = 'round'; c.lineCap = 'round'; c.stroke(); }
+}
+function label(c, text, x, y, size, color) {
+  c.font = `600 ${size}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineWidth = size / 4; c.strokeStyle = '#000'; c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y);
+}
+const visShapes = () => S.shapes.filter(s => s.visible && s.points.length);
+
+function drawEdit(c, u) {
+  S.shapes.forEach((s, i) => {
+    if (!s.visible) return;
+    const act = i === S.active;
+    drawShape(c, s, { u, stroke: s.color, lw: (act ? 3 : 2) * u, fill: act ? s.color + '22' : null });
+    if (s.type === 'polygon' && s.points.length === 2) drawShape(c, { ...s, type: 'line' }, { u, stroke: s.color, lw: 2 * u });
+    const sz = (act ? 5 : 3) * u;
+    s.points.forEach((p, vi) => {
+      c.fillStyle = act && vi === selV ? '#fff' : s.color;
+      c.fillRect(p[0] - sz, p[1] - sz, sz * 2, sz * 2);
+      if (act) label(c, String(vi), p[0] + 12 * u, p[1] - 12 * u, 10 * u, '#ddd');
+    });
+    if (act && s.points[selV]) { const p = s.points[selV]; c.beginPath(); c.arc(p[0], p[1], 12 * u, 0, 7); c.strokeStyle = '#fff'; c.lineWidth = 2 * u; c.stroke(); }
+    if (s.points.length) { const [x, y] = centroid(s); label(c, s.name, x, y, 14 * u, s.color); }
+  });
+  if (showCross && mouse) {
+    const [x, y] = mouse;
+    c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = u;
+    c.beginPath(); c.moveTo(0, y); c.lineTo(S.W, y); c.moveTo(x, 0); c.lineTo(x, S.H); c.stroke();
+    c.beginPath(); c.arc(x, y, 10 * u, 0, 7); c.stroke();
+    c.textAlign = 'left'; c.font = `${11 * u}px ui-monospace,monospace`; c.fillStyle = '#fff';
+    c.fillText(`${Math.round(x)}, ${Math.round(y)}`, x + 14 * u, y + 18 * u);
+  }
+}
+function drawMasks(c, u) {
+  for (const s of visShapes()) drawShape(c, s, { u, fill: '#fff', stroke: closed(s) ? null : '#fff', lw: 4 * u });
+}
+function drawTest(c, u, t) {
+  const list = visShapes(); if (!list.length) return label(c, 'No shapes yet', S.W / 2, S.H / 2, 30 * u, '#fff');
+  const idx = Math.floor(t / 1.1) % list.length;
+  list.forEach((s, i) => {
+    if (i === idx) drawShape(c, s, { u, fill: s.color, stroke: s.color, lw: 8 * u, r: 14 * u });
+    else drawShape(c, s, { u, stroke: s.color + '66', lw: 2 * u });
+  });
+  const s = list[idx], [x, y] = centroid(s); label(c, s.name, x, y, 26 * u, '#fff');
+}
+function drawGrid(c, u) {
+  const W = S.W, Hh = S.H;
+  c.lineWidth = u;
+  for (let x = 0; x <= W; x += 50) { c.strokeStyle = x % 500 === 0 ? '#888' : x % 100 === 0 ? '#444' : '#1d1d1d'; c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, Hh); c.stroke(); }
+  for (let y = 0; y <= Hh; y += 50) { c.strokeStyle = y % 500 === 0 ? '#888' : y % 100 === 0 ? '#444' : '#1d1d1d'; c.beginPath(); c.moveTo(0, y + .5); c.lineTo(W, y + .5); c.stroke(); }
+  c.strokeStyle = '#fff'; c.lineWidth = 3 * u; c.strokeRect(1.5 * u, 1.5 * u, W - 3 * u, Hh - 3 * u);
+  c.beginPath(); c.moveTo(0, 0); c.lineTo(W, Hh); c.moveTo(W, 0); c.lineTo(0, Hh); c.strokeStyle = '#333'; c.lineWidth = u; c.stroke();
+  // focus target
+  const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 8;
+  for (let i = 0; i < 36; i++) { if (i % 2) continue; const a0 = i / 36 * Math.PI * 2, a1 = (i + 1) / 36 * Math.PI * 2; c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, R, a0, a1); c.closePath(); c.fillStyle = '#ddd'; c.fill(); }
+  c.font = `${12 * u}px ui-monospace,monospace`; c.fillStyle = '#aaa'; c.textAlign = 'left'; c.textBaseline = 'top';
+  for (let x = 100; x < W; x += 100) c.fillText(x, x + 3, 4);
+  for (let y = 100; y < Hh; y += 100) c.fillText(y, 4, y + 3);
+  label(c, `${W} × ${Hh}`, cx, cy + R + 30 * u, 22 * u, '#fff');
+  for (const s of visShapes()) drawShape(c, s, { u, stroke: s.color + 'aa', lw: 2 * u });
+}
+function partialPath(c, s, frac) {
+  const P = s.points.slice(); if (closed(s)) P.push(P[0]);
+  let total = 0; const L = [];
+  for (let i = 1; i < P.length; i++) { const l = Math.hypot(P[i][0] - P[i-1][0], P[i][1] - P[i-1][1]); L.push(l); total += l; }
+  let left = total * frac; c.beginPath(); c.moveTo(P[0][0], P[0][1]);
+  for (let i = 1; i < P.length && left > 0; i++) {
+    const t = Math.min(1, left / (L[i-1] || 1)); left -= L[i-1];
+    c.lineTo(P[i-1][0] + (P[i][0] - P[i-1][0]) * t, P[i-1][1] + (P[i][1] - P[i-1][1]) * t);
+  }
+}
+const rnd = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+function drawDemo(c, u, t) {
+  const list = visShapes().filter(s => s.type !== 'points' && s.points.length > 1);
+  if (!list.length) return label(c, 'Map some shapes first', S.W / 2, S.H / 2, 30 * u, '#fff');
+  c.save();
+  if (demo === 'trace') {
+    list.forEach((s, i) => {
+      const f = clamp(((t * 0.35 + i * 0.12) % 1.5), 0, 1), col = `hsl(${(t * 40 + i * 50) % 360},100%,60%)`;
+      c.shadowColor = col; c.shadowBlur = 25 * u; c.strokeStyle = col; c.lineWidth = 5 * u; c.lineJoin = c.lineCap = 'round';
+      partialPath(c, s, f); c.stroke();
+    });
+  } else if (demo === 'rainbow') {
+    list.forEach((s, i) => { const col = `hsl(${(t * 60 + i * 40) % 360},90%,55%)`; drawShape(c, s, { u, fill: col, stroke: col, lw: 8 * u }); });
+  } else if (demo === 'pulse') {
+    list.forEach((s, i) => { const a = .15 + .85 * (.5 + .5 * Math.sin(t * 2.5 - i * .7)); const col = `rgba(255,${Math.round(150 + 80 * a)},${Math.round(60 * a)},${a})`; drawShape(c, s, { u, fill: col, stroke: col, lw: 6 * u }); });
+  } else if (demo === 'lightning') {
+    const k = Math.floor(t * 12), flash = rnd(Math.floor(t * 1.3)) > .55 && rnd(k) > .45;
+    list.forEach(s => drawShape(c, s, flash ? { u, fill: '#eef4ff', stroke: '#fff', lw: 6 * u } : { u, fill: 'rgba(30,40,90,.35)', stroke: 'rgba(80,110,255,.5)', lw: 2 * u }));
+  } else if (demo === 'sweep' || demo === 'fire') {
+    c.beginPath();
+    list.filter(closed).forEach(s => { s.points.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); });
+    c.save(); c.clip();
+    if (demo === 'sweep') {
+      const x = ((t * 0.25) % 1.4 - 0.2) * S.W, w = S.W * 0.12, g = c.createLinearGradient(x - w, 0, x + w, 0);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(.5, 'rgba(255,255,255,.95)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g; c.fillRect(0, 0, S.W, S.H);
+    } else {
+      const g = c.createLinearGradient(0, S.H, 0, 0);
+      g.addColorStop(0, '#ff7a00'); g.addColorStop(.5, '#a01800'); g.addColorStop(1, '#100000');
+      c.globalAlpha = .55 + .45 * (.5 + .5 * Math.sin(t * 9) * Math.sin(t * 13.7)); c.fillStyle = g; c.fillRect(0, 0, S.W, S.H); c.globalAlpha = 1;
+      for (let i = 0; i < 60; i++) { const x = rnd(i) * S.W, sp = 60 + rnd(i + 99) * 140, y = S.H - ((t * sp + rnd(i + 7) * S.H) % S.H); c.fillStyle = `rgba(255,${150 + Math.round(rnd(i + 3) * 100)},40,${y / S.H})`; c.beginPath(); c.arc(x + Math.sin(t * 2 + i) * 20 * u, y, 3 * u, 0, 7); c.fill(); }
+    }
+    c.restore();
+    list.filter(s => !closed(s)).forEach(s => drawShape(c, s, { u, stroke: demo === 'fire' ? '#ff7a00' : '#fff', lw: 4 * u }));
+  }
+  c.restore();
+}
+function drawPlayMask(c) {
+  c.clearRect(0, 0, S.W, S.H);
+  if (!playMask) return;
+  const showS = S.shapes.filter(s => s.role === 'show' && closed(s)), block = S.shapes.filter(s => s.role === 'block' && closed(s));
+  if (showS.length) { c.fillStyle = '#000'; c.fillRect(0, 0, S.W, S.H); c.globalCompositeOperation = 'destination-out'; showS.forEach(s => { pathFor(c, s); c.fill(); }); c.globalCompositeOperation = 'source-over'; }
+  c.fillStyle = '#000'; block.forEach(s => { pathFor(c, s); c.fill(); });
+}
+function drawOverlay() {
+  const d = dpr(); octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight);
+  if (mode !== 'pin') return;
+  const c = corners();
+  octx.strokeStyle = '#ffb020'; octx.lineWidth = 2; octx.beginPath(); c.forEach((p, i) => i ? octx.lineTo(p[0], p[1]) : octx.moveTo(p[0], p[1])); octx.closePath(); octx.stroke();
+  c.forEach((p, i) => {
+    octx.beginPath(); octx.arc(p[0], p[1], 16, 0, 7); octx.fillStyle = i === pinSel ? '#ffb020' : 'rgba(255,176,32,.35)'; octx.fill(); octx.strokeStyle = '#fff'; octx.stroke();
+    octx.fillStyle = '#000'; octx.font = 'bold 13px system-ui'; octx.textAlign = 'center'; octx.textBaseline = 'middle'; octx.fillText(['TL','TR','BR','BL'][i], p[0], p[1]);
+  });
+}
+function frame(ms) {
+  const t = ms / 1000, c = ctx, u = Math.max(1, S.W / 1280);
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.shadowBlur = 0;
+  if (mode === 'play') { tickShow(); drawPlayMask(c); }
+  else {
+    c.fillStyle = mode === 'edit' || mode === 'pin' ? BG[bgLevel] : '#000'; c.fillRect(0, 0, S.W, S.H);
+    if (mode === 'edit') drawEdit(c, u);
+    else if (mode === 'masks') drawMasks(c, u);
+    else if (mode === 'test') drawTest(c, u, t);
+    else if (mode === 'grid' || mode === 'pin') drawGrid(c, u);
+    else if (mode === 'demo') drawDemo(c, u, t);
+  }
+  drawOverlay();
+  requestAnimationFrame(frame);
+}
+
+// ---------- export / import ----------
+const safe = s => String(s).replace(/[^\w-]+/g, '_') || 'shape';
+function download(name, blob) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+function exportSVG() {
+  const pts = s => s.points.map(p => p.join(',')).join(' ');
+  const body = visShapes().map(s => {
+    const attrs = `id="${esc(safe(s.name))}" data-name="${esc(s.name)}" data-role="${s.role}"`;
+    let el;
+    if (s.type === 'points') el = s.points.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="6" fill="${s.color}"/>`).join('');
+    else if (closed(s)) el = `<polygon points="${pts(s)}" fill="${s.color}" fill-opacity="0.15" stroke="${s.color}" stroke-width="2"/>`;
+    else el = `<polyline points="${pts(s)}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    return `  <g ${attrs}>${el}</g>`;
+  }).join('\n');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S.W}" height="${S.H}" viewBox="0 0 ${S.W} ${S.H}">\n  <g id="background"><rect width="${S.W}" height="${S.H}" fill="#000"/></g>\n${body}\n</svg>\n`;
+  download(`house-guide_${S.W}x${S.H}.svg`, new Blob([svg], { type: 'image/svg+xml' }));
+}
+function pngOf(fn) { const c = document.createElement('canvas'); c.width = S.W; c.height = S.H; const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, S.W, S.H); fn(x, Math.max(1, S.W / 1280)); return new Promise(r => c.toBlob(r, 'image/png')); }
+async function exportGuide() {
+  download(`house-guide_${S.W}x${S.H}.png`, await pngOf((c, u) => visShapes().forEach(s => { drawShape(c, s, { u, stroke: s.color, lw: 2 * u, fill: s.color + '22' }); const [x, y] = centroid(s); label(c, s.name, x, y, 14 * u, s.color); })));
+}
+async function exportColor() {
+  download(`house-colormap_${S.W}x${S.H}.png`, await pngOf((c, u) => visShapes().forEach(s => drawShape(c, s, { u, fill: s.color, stroke: s.color, lw: 6 * u }))));
+}
+async function exportMasks() {
+  const list = visShapes(); if (!list.length) return toast('No shapes to export');
+  toast(`Downloading ${list.length} masks (allow multiple downloads if asked)`);
+  for (const s of list) {
+    download(`mask_${safe(s.name)}_${S.W}x${S.H}.png`, await pngOf((c, u) => drawShape(c, s, { u, fill: '#fff', stroke: closed(s) ? null : '#fff', lw: 6 * u, r: 8 * u })));
+    await new Promise(r => setTimeout(r, 350));
+  }
+}
+function exportJSON() {
+  const data = { app: 'house-mapper', version: 1, note: 'Coordinates are projector pixels; origin top-left.', ...S };
+  download(`house-map_${S.W}x${S.H}.json`, new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+}
+function importJSON(file) {
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const o = JSON.parse(r.result);
+      if (!Array.isArray(o.shapes) || !o.W || !o.H) throw new Error('Not a Projection Mapper map file');
+      snapshot();
+      S = { W: +o.W, H: +o.H, corners: o.corners || null, active: o.shapes.length ? 0 : -1,
+        shapes: o.shapes.map((s, i) => ({ id: s.id || uid(), name: String(s.name || 'shape_' + (i + 1)), type: ['polygon','line','points'].includes(s.type) ? s.type : 'polygon',
+          role: ['show','block','none'].includes(s.role) ? s.role : 'show', color: /^#[0-9a-f]{6}$/i.test(s.color) ? s.color : PALETTE[i % PALETTE.length],
+          visible: s.visible !== false, points: (s.points || []).filter(p => Array.isArray(p) && p.length >= 2).map(p => [+p[0], +p[1]]) })) };
+      selV = -1; syncRes(); updateTransform(); changed(true); renderPlaylist(); toast('Map loaded');
+    } catch (e) { alert('Could not load map: ' + e.message); }
+  };
+  r.readAsText(file);
+}
+
+// ---------- resolution ----------
+function syncRes() { $('#resW').value = S.W; $('#resH').value = S.H; const [w, h] = screenRes(); $('#screenInfo').textContent = `this screen: ${w}×${h}`; }
+function applyRes(w, h) {
+  w = Math.round(w); h = Math.round(h);
+  if (!(w >= 64 && h >= 64 && w <= 8192 && h <= 8192)) return alert('Resolution must be between 64 and 8192');
+  if (w === S.W && h === S.H) return;
+  snapshot();
+  if (S.shapes.some(s => s.points.length) && confirm('Scale existing points to the new resolution?\n\nOK = scale (use when only the resolution changed)\nCancel = keep pixel coordinates as they are')) {
+    const sx = w / S.W, sy = h / S.H; S.shapes.forEach(s => s.points = s.points.map(p => [Math.round(p[0] * sx), Math.round(p[1] * sy)]));
+  }
+  S.W = w; S.H = h; S.corners = null; updateTransform(); syncRes(); changed(true); renderPlaylist();
+}
+
+// ---------- playlist ----------
+const PKEY = KEY + '-play';
+let PL = [], cur = -1, startIdx = 0, layer = null, advancing = false, paused = false, pausedAt = 0, itemStart = 0, failStreak = 0;
+const P = { hold: 10, fade: 1, loop: true, shuffle: false, mute: false, mask: true };
+try { Object.assign(P, JSON.parse(localStorage.getItem(PKEY)) || {}); } catch (e) {}
+const saveP = () => { try { localStorage.setItem(PKEY, JSON.stringify(P)); } catch (e) {} };
+playMask = P.mask;
+$('#holdDef').value = P.hold; $('#fade').value = P.fade; $('#loop').checked = P.loop; $('#shuffle').checked = P.shuffle; $('#mute').checked = P.mute; $('#pmask').checked = P.mask;
+
+// IndexedDB keeps file handles so the playlist can be restored after a reload (Chrome/Edge).
+const idb = (() => {
+  let p;
+  const open = () => p || (p = new Promise((res, rej) => { const r = indexedDB.open('house-mapper', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+  return {
+    get: k => open().then(db => new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })),
+    set: (k, v) => open().then(db => new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); })),
+  };
+})();
+function savePlaylist() { idb.set('playlist', PL.filter(it => it.handle).map(it => ({ handle: it.handle, name: it.name, hold: it.hold }))).catch(() => {}); }
+
+const VEXT = /\.(mp4|m4v|webm|mov|ogv|mkv)$/i, IEXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+function kindOf(f) { return f.type.startsWith('video/') || VEXT.test(f.name) ? 'video' : f.type.startsWith('image/') || IEXT.test(f.name) ? 'image' : null; }
+function addFile(file, handle, hold) {
+  const kind = kindOf(file); if (!kind) return false;
+  const it = { id: uid(), name: file.name, kind, url: URL.createObjectURL(file), handle: handle || null, hold: hold || null, w: 0, h: 0, dur: 0 };
+  PL.push(it);
+  if (kind === 'video') { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => { it.w = v.videoWidth; it.h = v.videoHeight; it.dur = v.duration; v.removeAttribute('src'); renderPlaylist(); }; v.onerror = () => { it.err = true; renderPlaylist(); }; v.src = it.url; }
+  else { const im = new Image(); im.onload = () => { it.w = im.naturalWidth; it.h = im.naturalHeight; renderPlaylist(); }; im.onerror = () => { it.err = true; renderPlaylist(); }; im.src = it.url; }
+  return true;
+}
+async function addHandles(handles) {
+  let n = 0;
+  for (const h of handles) { try { if (addFile(await h.getFile(), h)) n++; } catch (e) {} }
+  done(n, handles.length);
+}
+function addFiles(files) { let n = 0; for (const f of files) if (addFile(f)) n++; done(n, files.length); }
+function done(n, total) { renderPlaylist(); savePlaylist(); if (n < total) toast(`Skipped ${total - n} file(s) that aren't video or images`); }
+
+$('#btnAdd').addEventListener('click', async () => {
+  if (window.showOpenFilePicker) {
+    try {
+      const hs = await showOpenFilePicker({ multiple: true, types: [{ description: 'Videos and images', accept: { 'video/*': ['.mp4', '.m4v', '.webm', '.mov'], 'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp'] } }] });
+      return addHandles(hs);
+    } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  $('#media').click();
+});
+$('#media').addEventListener('change', e => { addFiles([...e.target.files]); e.target.value = ''; });
+$('#btnClearPl').addEventListener('click', () => { if (PL.length && confirm('Remove everything from the playlist?')) { if (mode === 'play') setMode('edit'); PL.forEach(it => URL.revokeObjectURL(it.url)); PL = []; startIdx = 0; renderPlaylist(); savePlaylist(); } });
+
+// drag & drop files anywhere on the window
+addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); document.body.classList.add('dragging'); } });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+addEventListener('drop', e => {
+  e.preventDefault(); document.body.classList.remove('dragging');
+  const items = [...e.dataTransfer.items].filter(i => i.kind === 'file');
+  if (items.length && items[0].getAsFileSystemHandle) {
+    const ps = items.map(i => i.getAsFileSystemHandle()); // must be called synchronously
+    Promise.all(ps).then(hs => addHandles(hs.filter(h => h && h.kind === 'file')));
+  } else addFiles([...e.dataTransfer.files]);
+});
+
+// restore after reload
+let pending = [];
+async function restore(prompted) {
+  const list = pending; let ok = 0;
+  for (const r of list) {
+    try {
+      let perm = await r.handle.queryPermission({ mode: 'read' });
+      if (perm !== 'granted' && prompted) perm = await r.handle.requestPermission({ mode: 'read' });
+      if (perm !== 'granted') continue;
+      if (addFile(await r.handle.getFile(), r.handle, r.hold)) ok++;
+    } catch (e) {}
+  }
+  if (!ok && !prompted) return false;
+  pending = []; $('#btnRestore').hidden = true; renderPlaylist(); savePlaylist();
+  if (ok < list.length) toast(`Restored ${ok} of ${list.length} files (others were moved or deleted)`);
+  return true;
+}
+idb.get('playlist').then(async list => {
+  if (!list || !list.length || PL.length) return;
+  pending = list;
+  const all = await Promise.all(list.map(r => r.handle.queryPermission({ mode: 'read' }).catch(() => 'denied')));
+  if (all.every(p => p === 'granted')) return restore(false);
+  const b = $('#btnRestore'); b.textContent = `Restore playlist (${list.length})`; b.hidden = false;
+}).catch(() => {});
+$('#btnRestore').addEventListener('click', () => restore(true));
+
+function fmtDur(s) { s = Math.round(s); return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}s`; }
+function renderPlaylist() {
+  const el = $('#playlist');
+  if (!PL.length) { el.innerHTML = '<p class="hint">No media yet. Add files, or drag them onto this window.</p>'; return; }
+  let total = 0;
+  el.innerHTML = PL.map((it, i) => {
+    const bad = it.err || (it.w && (it.w !== S.W || it.h !== S.H));
+    const res = it.err ? "can't play" : it.w ? `${it.w}×${it.h}${bad ? ' ≠' : ' ✓'}` : '…';
+    const len = it.kind === 'video' ? (it.dur ? fmtDur(it.dur) : '') : `<input type="number" min="1" max="3600" data-hold="${i}" value="${it.hold || ''}" placeholder="${P.hold}" title="Seconds on screen (blank = default)">s`;
+    total += it.kind === 'video' ? it.dur || 0 : it.hold || P.hold;
+    const cls = ['pl', mode === 'play' && i === cur ? 'now' : '', mode !== 'play' && i === startIdx ? 'start' : ''].join(' ');
+    return `<div class="${cls}" data-i="${i}" title="${esc(it.name)}${bad && !it.err ? ` (not ${S.W}×${S.H}, it will be stretched)` : ''}">
+      <span class="ix">${it.kind === 'video' ? '▶' : '▣'}</span>
+      <span class="nm">${i + 1}. ${esc(it.name)}</span>
+      <span class="meta${bad ? ' bad' : ''}">${res} ${len}</span>
+      <button data-a="up" title="Move up">▲</button><button data-a="down" title="Move down">▼</button><button data-a="rm" title="Remove">✕</button>
+    </div>`;
+  }).join('') + `<p class="hint">${PL.length} item${PL.length > 1 ? 's' : ''} · about ${fmtDur(total)} per loop</p>`;
+}
+$('#playlist').addEventListener('click', e => {
+  const row = e.target.closest('.pl'); if (!row || e.target.tagName === 'INPUT') return;
+  const i = +row.dataset.i, a = e.target.dataset.a;
+  if (a === 'rm') {
+    const [it] = PL.splice(i, 1);
+    if (mode === 'play' && i === cur) { cur--; advance(1); } else if (i < cur) cur--;
+    setTimeout(() => URL.revokeObjectURL(it.url), (P.fade + 1) * 1000);
+    startIdx = Math.min(startIdx, Math.max(0, PL.length - 1));
+  } else if (a === 'up' || a === 'down') {
+    const j = a === 'up' ? i - 1 : i + 1; if (j < 0 || j >= PL.length) return;
+    [PL[i], PL[j]] = [PL[j], PL[i]];
+    if (cur === i) cur = j; else if (cur === j) cur = i;
+    if (startIdx === i) startIdx = j; else if (startIdx === j) startIdx = i;
+  } else if (mode === 'play') { showItem(i); return; }
+  else startIdx = i;
+  renderPlaylist(); savePlaylist();
+});
+$('#playlist').addEventListener('change', e => { const i = e.target.dataset.hold; if (i != null) { PL[+i].hold = Math.max(1, +e.target.value) || null; renderPlaylist(); savePlaylist(); } });
+
+$('#holdDef').addEventListener('change', e => { P.hold = Math.max(1, +e.target.value || 10); e.target.value = P.hold; saveP(); renderPlaylist(); });
+$('#fade').addEventListener('change', e => { P.fade = clamp(+e.target.value || 0, 0, 10); e.target.value = P.fade; saveP(); });
+$('#loop').addEventListener('change', e => { P.loop = e.target.checked; saveP(); });
+$('#shuffle').addEventListener('change', e => { P.shuffle = e.target.checked; saveP(); });
+$('#mute').addEventListener('change', e => { P.mute = e.target.checked; saveP(); if (layer && layer.tagName === 'VIDEO') layer.muted = P.mute; });
+$('#pmask').addEventListener('change', e => { playMask = P.mask = e.target.checked; saveP(); });
+$('#btnPlay').addEventListener('click', () => setMode('play'));
+
+// ---------- show engine ----------
+function startShow() {
+  paused = false; failStreak = 0; cur = -1;
+  if (PL.length) showItem(P.shuffle ? Math.floor(Math.random() * PL.length) : startIdx);
+  renderPlaylist();
+}
+function stopShow() {
+  stage.querySelectorAll('.layer').forEach(el => { if (el.pause) el.pause(); el.remove(); });
+  layer = null; advancing = false; cur = -1; renderPlaylist();
+}
+function nextIndex() {
+  if (P.shuffle && PL.length > 1) { let n; do n = Math.floor(Math.random() * PL.length); while (n === cur); return n; }
+  if (cur + 1 < PL.length) return cur + 1;
+  return P.loop ? 0 : -1;
+}
+function advance(dir) {
+  if (mode !== 'play' || !PL.length) return;
+  if (dir < 0) return showItem(cur <= 0 ? PL.length - 1 : cur - 1);
+  const n = nextIndex();
+  if (n < 0) { // end of show: fade to black and stay there
+    if (layer) { const old = layer; old.style.transitionDuration = P.fade + 's'; old.style.opacity = 0; setTimeout(() => { if (old.pause) old.pause(); old.remove(); }, P.fade * 1000 + 100); }
+    layer = null; cur = -1; renderPlaylist(); return;
+  }
+  showItem(n);
+}
+let showToken = 0;
+function showItem(i) {
+  if (!PL.length) return;
+  i = ((i % PL.length) + PL.length) % PL.length;
+  const it = PL[i], token = ++showToken;
+  advancing = true; cur = i; paused = false;
+  const el = it.kind === 'video' ? document.createElement('video') : new Image();
+  el.className = 'layer'; el.style.transitionDuration = P.fade + 's';
+  if (it.kind === 'video') { el.muted = P.mute; el.playsInline = true; el.preload = 'auto'; el.loop = PL.length === 1 && P.loop; }
+  stage.insertBefore(el, map);
+  let started = false;
+  const go = () => {
+    if (started) return; started = true;
+    if (token !== showToken || mode !== 'play') { el.remove(); return; }
+    failStreak = 0;
+    if (el.play) el.play().catch(() => { el.muted = true; el.play().catch(() => {}); });
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = 1; }));
+    const old = layer; layer = el; itemStart = performance.now(); advancing = false;
+    if (old) { old.style.transitionDuration = P.fade + 's'; old.style.opacity = 0; setTimeout(() => { if (old.pause) old.pause(); old.remove(); }, P.fade * 1000 + 150); }
+    renderPlaylist();
+  };
+  const fail = () => {
+    if (started) return; started = true; el.remove();
+    if (token !== showToken) return;
+    advancing = false; it.err = true;
+    if (++failStreak >= PL.length) { toast('None of the playlist items could be played'); renderPlaylist(); return; }
+    advance(1);
+  };
+  if (it.kind === 'video') { el.addEventListener('canplay', go, { once: true }); el.addEventListener('error', fail, { once: true }); }
+  else { el.onload = go; el.onerror = fail; }
+  el.src = it.url;
+  setTimeout(() => { if (!started) (el.readyState > 0 || el.complete ? go : fail)(); }, 5000);
+}
+function togglePause() {
+  if (!layer) return;
+  paused = !paused;
+  if (layer.tagName === 'VIDEO') paused ? layer.pause() : layer.play().catch(() => {});
+  else if (paused) pausedAt = performance.now(); else itemStart += performance.now() - pausedAt;
+}
+function tickShow() {
+  if (mode !== 'play' || paused || advancing || !layer || cur < 0) return;
+  let remain;
+  if (layer.tagName === 'VIDEO') {
+    if (layer.loop) return;
+    if (layer.ended) remain = 0;
+    else { const d = layer.duration; if (!isFinite(d)) return; remain = d - layer.currentTime; }
+  } else remain = ((PL[cur] && PL[cur].hold) || P.hold) - (performance.now() - itemStart) / 1000;
+  const len = layer.tagName === 'VIDEO' ? layer.duration : (PL[cur] && PL[cur].hold) || P.hold;
+  // start the next item early so the crossfade finishes as this one ends
+  if (remain <= Math.min(P.fade, 0.5 * len)) advance(1);
+}
+
+// ---------- wire up ----------
+document.querySelectorAll('#modes [data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+$('#btnFull').addEventListener('click', toggleFull);
+$('#btnHide').addEventListener('click', () => toggleUI(true));
+$('#btnHelp').addEventListener('click', () => showHelp(true));
+$('#helpClose').addEventListener('click', () => showHelp(false));
+$('#bg').addEventListener('change', e => bgLevel = +e.target.value);
+$('#cross').addEventListener('change', e => showCross = e.target.checked);
+$('#btnNew').addEventListener('click', () => newShape());
+$('#btnTemplate').addEventListener('click', addTemplate);
+$('#btnRes').addEventListener('click', () => applyRes(+$('#resW').value, +$('#resH').value));
+$('#btnScreen').addEventListener('click', () => { const [w, h] = screenRes(); applyRes(w, h); });
+$('#btnPinReset').addEventListener('click', () => { snapshot(); S.corners = null; updateTransform(); changed(false); });
+$('#demo').addEventListener('change', e => { demo = e.target.value; setMode('demo'); });
+$('#exSvg').addEventListener('click', exportSVG);
+$('#exPng').addEventListener('click', exportGuide);
+$('#exColor').addEventListener('click', exportColor);
+$('#exMasks').addEventListener('click', exportMasks);
+$('#exJson').addEventListener('click', exportJSON);
+$('#imJsonBtn').addEventListener('click', () => $('#imJson').click());
+$('#imJson').addEventListener('change', e => { if (e.target.files[0]) importJSON(e.target.files[0]); e.target.value = ''; });
+addEventListener('resize', updateTransform);
+document.addEventListener('fullscreenchange', () => setTimeout(updateTransform, 50));
+
+syncRes(); updateTransform(); renderShapes(); setMode('edit'); updateStatus();
+let seen = false; try { seen = !!localStorage.getItem(KEY + '-help'); } catch (e) {}
+if (!seen) showHelp(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
